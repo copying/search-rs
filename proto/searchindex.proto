@@ -1,0 +1,14 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
+package searchindex;
+
+message Entry {
+  string /* JSON */ data = 1;
+  google.protobuf.StringValue /* EWKT */ geom = 2;
+  bytes response = 3;
+}
+
+service Indexer {
+  rpc AddEntries (stream Entry) returns (google.protobuf.Empty);
+}

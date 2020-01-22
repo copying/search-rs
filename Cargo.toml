@@ -1,0 +1,30 @@
+[package]
+name = "search-rs"
+version = "0.1.0"
+authors = ["Martí Angelats i Ribera <marti.angelats@gmail.com>"]
+edition = "2018"
+
+[[bin]]
+name = "server"
+path = "src/server/main.rs"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+[[bin]]
+name = "test"
+path = "src/test.rs"
+
+[dependencies]
+bytes = "0.4"
+futures = { version = "0.3", default-features = false}
+futures-util = { version = "0.3", default-features = false}
+prost = "0.6"
+prost-derive = "0.5"
+tokio = { version = "0.2", features = ["rt-threaded", "stream", "macros"] }
+tokio-postgres = "0.5.0-alpha.2"
+tonic = "0.1.1"
+
+[build-dependencies]
+tonic-build = "0.1.1"
