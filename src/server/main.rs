@@ -5,12 +5,12 @@ mod utils;
 
 use futures_util::stream::StreamExt;
 use tokio_postgres::Client;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{transport::Server, Request, Response, Status, Code};
 
 use postgres::make_postgres_client;
 use search_index::{
     indexer_server::{Indexer, IndexerServer},
-    Entry
+    Entry, Query, Page
 };
 use utils::err_status;
 
@@ -36,6 +36,36 @@ impl Indexer for SearchIndex {
             err_status(self.client.execute(&stmt, &[&data, &geom, &response]).await)?;
         }
         Ok(Response::new(()))
+    }
+
+    async fn search(
+        &self,
+        request: Request<Query>
+    ) -> Result<Response<Page>, Status> {
+        let q = request.into_inner();
+
+        let (lat, lng, radius) = match q.radius {
+            Some(circle) => {
+                if !(circle.lat >= -90.0 && circle.lat <= 90.0) {
+                    return Err(Status::new(Code::InvalidArgument, "Latitude is outside the valid range"))
+                }
+                if !(circle.lat > -180.0 && circle.lat <= 90.0) {
+                    return Err(Status::new(Code::InvalidArgument, "Longitude is outside the valid range"))
+                }
+                if !circle.radius.is_finite() {
+                    return Err(Status::new(Code::InvalidArgument, "Radius are not a finite number"))
+                }
+                (Some(circle.lat), Some(circle.long), Some(circle.radius))
+            },
+            None => (None, None, None)
+        };
+
+        let results = err_status(self.client.query(statements::SEARCH, &[&q.q, &lat, &lng, &radius]).await)?;
+
+
+        Ok(Response::new(Page {
+            responses: results.into_iter().map(|row| row.get(0)).collect()
+        }))
     }
 }
 
