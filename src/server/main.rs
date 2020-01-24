@@ -38,6 +38,14 @@ impl Indexer for SearchIndex {
         Ok(Response::new(()))
     }
 
+    async fn truncate(
+        &self,
+        _request: Request<()>
+    ) -> Result<Response<()>, Status> {
+        err_status(self.client.execute(statements::TRUNCATE, &[]).await)?;
+        Ok(Response::new(()))
+    }
+
     async fn search(
         &self,
         request: Request<Query>

@@ -14,6 +14,9 @@ use std::str;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = IndexerClient::connect("http://[::1]:50051").await?;
 
+    println!("Truncating");
+    println!("{:?}", client.truncate(tonic::Request::new(())).await?);
+
     println!("Adding entries");
     let request = tonic::Request::new(stream::iter(vec![
         Entry {

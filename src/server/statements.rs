@@ -6,6 +6,10 @@ CREATE TABLE index.test (
 )
 "#;
 
+pub const TRUNCATE: &str = r#"
+TRUNCATE TABLE index.test
+"#;
+
 pub const ADD_ENTRY: &str = r#"
 INSERT INTO index.test (index, geo, result)
     VALUES (
