@@ -25,7 +25,6 @@ message Page {
 }
 
 service Indexer {
-  rpc AddEntries (stream Entry) returns (google.protobuf.Empty);
-  rpc Truncate (google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc SetEntries (stream Entry) returns (google.protobuf.Empty);
   rpc Search (Query) returns (Page);
 }

@@ -1,23 +1,31 @@
-pub const CREATE: &str = r#"
-CREATE TABLE index.test (
-    index tsvector NOT NULL,
-    geo geography,
-    result bytea NOT NULL
-)
-"#;
+pub fn create_index_table (table: &String) -> String {
+    format!(r#"
+        CREATE TABLE index."{}" (
+            index tsvector NOT NULL,
+            geo geography,
+            result bytea NOT NULL
+        )
+    "#, table)
+}
 
-pub const TRUNCATE: &str = r#"
-TRUNCATE TABLE index.test
-"#;
+pub fn add_entry (table: &String) -> String {
+    format!(r#"
+        INSERT INTO index."{}" (index, geo, result)
+            VALUES (
+                json_to_tsvector('english', ($1::text)::json, '["string", "numeric"]'),
+                ST_GeomFromEWKT($2)::geography,
+                $3
+            )
+    "#, table)
+}
 
-pub const ADD_ENTRY: &str = r#"
-INSERT INTO index.test (index, geo, result)
-    VALUES (
-        json_to_tsvector('english', ($1::text)::json, '["string", "numeric"]'),
-        ST_GeomFromEWKT($2)::geography,
-        $3
-    )
-"#;
+pub fn rename_table (from_table: &String, to_table: &String) -> String {
+    format!(r#"ALTER TABLE index."{}" RENAME TO "{}""#, from_table, to_table)
+}
+
+pub fn drop_table (table: &String) -> String {
+    format!(r#"DROP TABLE index."{}""#, table)
+}
 
 
 /*

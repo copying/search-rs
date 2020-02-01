@@ -17,6 +17,7 @@ name = "test"
 path = "src/test.rs"
 
 [dependencies]
+rand = "0.7.3"
 bytes = "0.4"
 futures = { version = "0.3", default-features = false}
 futures-util = { version = "0.3", default-features = false}
