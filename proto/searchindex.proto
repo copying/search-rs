@@ -24,7 +24,19 @@ message Page {
   repeated bytes responses = 1;
 }
 
+message Index {
+  string name = 1;
+  string language = 2;
+  int32 response_size = 3;
+}
+
+message IndexId {
+  string name = 1;
+}
+
 service Indexer {
+  rpc AddIndex (Index) returns (google.protobuf.Empty);
+  rpc DeleteIndex (IndexId) returns (google.protobuf.Empty);
   rpc SetEntries (stream Entry) returns (google.protobuf.Empty);
   rpc Search (Query) returns (Page);
 }

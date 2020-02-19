@@ -3,15 +3,16 @@ mod search_index;
 mod statements;
 mod utils;
 
+use futures::future;
 use futures_util::stream::StreamExt;
 use rand::Rng;
-use tokio_postgres::{Client};
+use tokio_postgres::{Client, Error};
 use tonic::{transport::Server, Request, Response, Status, Code};
 
 use postgres::make_postgres_client;
 use search_index::{
     indexer_server::{Indexer, IndexerServer},
-    Entry, Query, Page
+    Index, IndexId, Entry, Query, Page
 };
 use utils::{err_status, require_arg};
 
@@ -20,6 +21,7 @@ pub struct SearchIndex {
 }
 
 const SCHEMA: &str = "index";
+const INDEX_TABLE: &str = "index";
 
 
 async fn set_entries(
@@ -71,11 +73,78 @@ async fn swap_tables(
 
 #[tonic::async_trait]
 impl Indexer for SearchIndex {
+    async fn delete_index(
+        &self,
+        request: Request<IndexId>
+    ) -> Result<Response<()>, Status> {
+        let name = request.into_inner().name;
+        if name.is_empty() {
+            return Err(Status::new(Code::InvalidArgument, "The name connot be empty"))
+        } else if name == INDEX_TABLE {
+            return Err(Status::new(Code::InvalidArgument, "This name is already taken by the main table"))
+        }
+
+        let mut client = err_status(make_postgres_client().await)?;
+        {
+            let transaction = err_status(client.transaction().await)?;
+            let query: &str = &statements::drop_table(&SCHEMA, &name);
+            err_status(transaction.execute(query, &[]).await)?;
+            let query: &str = &statements::delete_index(&SCHEMA, &INDEX_TABLE);
+            err_status(transaction.execute(query, &[&name]).await)?;
+            err_status(transaction.commit().await)?;
+        }
+        Ok(Response::new(()))
+    }
+
+    async fn add_index(
+        &self,
+        request: Request<Index>
+    ) -> Result<Response<()>, Status> {
+        let index_def = request.into_inner();
+        if index_def.name.is_empty() {
+            return Err(Status::new(Code::InvalidArgument, "The name connot be empty"))
+        } else if index_def.name == INDEX_TABLE {
+            return Err(Status::new(Code::InvalidArgument, "This name is already taken by the main table"))
+        }
+
+        if index_def.response_size <= 0 {
+            return Err(Status::new(Code::InvalidArgument, "Response size must be a positive integer"))
+        }
+
+        let mut client = err_status(make_postgres_client().await)?;
+        {
+            let transaction = err_status(client.transaction().await)?;
+            let query: &str = &statements::add_index(&SCHEMA, &INDEX_TABLE);
+            let result = transaction.execute(query, &[&index_def.name, &index_def.language, &index_def.response_size]).await;
+            result.map_err(|e| {
+                match e.code().map(|code| code.code()) {
+                    Some("23505") => Status::new(Code::InvalidArgument, "Index already exists"),
+                    _ => {
+                        eprintln!("{}", e);
+                        Status::new(Code::Internal, "Internal error")
+                    }
+                }
+            })?;
+            let query: &str = &statements::create_index_table(&SCHEMA, &index_def.name);
+            err_status(transaction.execute(query, &[]).await)?;
+            err_status(transaction.commit().await)?;
+        }
+        Ok(Response::new(()))
+    }
+
+
     async fn set_entries(
         &self,
         request: Request<tonic::Streaming<Entry>>
     ) -> Result<Response<()>, Status> {
-        let name: &str = "test";
+        let metadata = request.metadata();
+        let name = require_arg(metadata.get("x-index-name"))?;
+        let query: &str = &statements::get_index(&SCHEMA, &INDEX_TABLE);
+        let results = err_status(self.client.query(query, &[&name]).await)?;
+        if results.len() < 1 {
+            return Err(Status::new(Code::InvalidArgument, "The selected index doesn't exist"))
+        }
+
         let tmp_name: &str = &{
             let mut rng = rand::thread_rng();
             format!("_{}_{}", name, rng.gen::<u32>())
@@ -87,12 +156,13 @@ impl Indexer for SearchIndex {
         Ok(Response::new(()))
     }
 
+
     async fn search(
         &self,
         request: Request<Query>
     ) -> Result<Response<Page>, Status> {
         let metadata = request.metadata();
-        let table_name = require_arg(metadata.get("x-index-name"))?;
+        let name = require_arg(metadata.get("x-index-name"))?;
 
         let q = request.into_inner();
 
@@ -112,9 +182,16 @@ impl Indexer for SearchIndex {
             None => (None, None, None)
         };
 
-        let query: &str = &statements::search(&SCHEMA, &table_name);
-        let results = err_status(self.client.query(query, &[&q.q, &lat, &lng, &radius]).await)?;
+        let query: &str = &statements::get_index(&SCHEMA, &INDEX_TABLE);
+        let results = err_status(self.client.query(query, &[&name]).await)?;
+        if results.len() < 1 {
+            return Err(Status::new(Code::InvalidArgument, "The selected index doesn't exist"))
+        }
+        let lang: &str = results[0].get(0);
+        let response_size: i32 = results[0].get(1);
 
+        let query: &str = &statements::search(&SCHEMA, &name);
+        let results = err_status(self.client.query(query, &[&q.q, &lat, &lng, &radius, &lang, &response_size]).await)?;
 
         Ok(Response::new(Page {
             responses: results.into_iter().map(|row| row.get(0)).collect()
@@ -122,15 +199,26 @@ impl Indexer for SearchIndex {
     }
 }
 
+async fn ensure_data_structure(client: &Client) -> Result<(), Error> {
+    future::try_join(
+        client.execute(statements::ADD_POSTGIS, &[]),
+        client.execute(&statements::create_main_table(&SCHEMA, &INDEX_TABLE) as &str, &[]),
+    ).await?;
+
+    // TODO: Add more checks for the data structure
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = make_postgres_client().await?;
 
-    // ensure_data_structure(&client).await?;
+    ensure_data_structure(&client).await?;
 
     let search_index = SearchIndex { client: client };
 
-    let addr = "[::1]:50051".parse()?;
+    let addr = "[::1]:3009".parse()?;
 
     println!("Server configured");
     Server::builder()
