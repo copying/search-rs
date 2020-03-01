@@ -1,11 +1,10 @@
-use tokio_postgres::Error;
+use std::fmt;
 use tonic::{Status, Code, metadata::AsciiMetadataValue};
 
-pub fn err_status<T>(result: Result<T, Error>) -> Result<T, Status> {
-    result.map_err(|e| {
-        eprintln!("{}", e);
-        Status::new(Code::Internal, "Internal error")
-    })
+
+pub fn internal_error<E: fmt::Display>(error: E) -> Status {
+    eprintln!("{}", error);
+    Status::new(Code::Internal, "Internal error")
 }
 
 pub fn require_arg(value: Option<&AsciiMetadataValue>) -> Result<String, Status> {

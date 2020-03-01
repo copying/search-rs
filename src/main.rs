@@ -14,7 +14,7 @@ use search_index::{
     indexer_server::{Indexer, IndexerServer},
     Index, IndexId, Entry, Query, Page
 };
-use utils::{err_status, require_arg};
+use utils::{internal_error, require_arg};
 
 pub struct SearchIndex {
     client : Client,
@@ -32,21 +32,21 @@ async fn set_entries(
     let stream = request.into_inner();
     futures::pin_mut!(stream);
 
-    let transaction = err_status(client.transaction().await)?;
+    let transaction = client.transaction().await.map_err(internal_error)?;
     let query: &str = &statements::create_index_table(&SCHEMA, &tmp_name);
-    err_status(transaction.execute(query, &[]).await)?;
+    transaction.execute(query, &[]).await.map_err(internal_error)?;
 
     let query: &str = &statements::add_entry(&SCHEMA, &tmp_name);
-    let stmt = err_status(transaction.prepare(query).await)?;
+    let stmt = transaction.prepare(query).await.map_err(internal_error)?;
     while let Some(entry) = stream.next().await {
         let entry = entry?;
         let data = entry.data;
         let geom = entry.geom;
         let response = entry.response;
-        err_status(transaction.execute(&stmt, &[&data, &geom, &response]).await)?;
+        transaction.execute(&stmt, &[&data, &geom, &response]).await.map_err(internal_error)?;
     }
 
-    err_status(transaction.commit().await)?;
+    transaction.commit().await.map_err(internal_error)?;
     Ok(())
 }
 
@@ -54,18 +54,18 @@ async fn swap_tables(
     client: &mut Client,
     name: &str,
     from_table: &str
-) -> Result<(), Status> {
+) -> Result<(), Error> {
     let temp_table = format!("{}_", from_table);
     {
-        let transaction = err_status(client.transaction().await)?;
+        let transaction = client.transaction().await?;
         let query: &str = &statements::rename_table(&SCHEMA, &name, &temp_table);
-        err_status(transaction.execute(query, &[]).await)?;
+        transaction.execute(query, &[]).await?;
         let query: &str = &statements::rename_table(&SCHEMA, &from_table, &name);
-        err_status(transaction.execute(query, &[]).await)?;
-        err_status(transaction.commit().await)?;
+        transaction.execute(query, &[]).await?;
+        transaction.commit().await?;
     }
     let query: &str = &statements::drop_table(&SCHEMA, &temp_table);
-    err_status(client.execute(query, &[]).await)?;
+    client.execute(query, &[]).await?;
 
     Ok(())
 }
@@ -84,14 +84,14 @@ impl Indexer for SearchIndex {
             return Err(Status::new(Code::InvalidArgument, "This name is already taken by the main table"))
         }
 
-        let mut client = err_status(make_postgres_client().await)?;
+        let mut client = make_postgres_client().await.map_err(internal_error)?;
         {
-            let transaction = err_status(client.transaction().await)?;
+            let transaction = client.transaction().await.map_err(internal_error)?;
             let query: &str = &statements::drop_table(&SCHEMA, &name);
-            err_status(transaction.execute(query, &[]).await)?;
+            transaction.execute(query, &[]).await.map_err(internal_error)?;
             let query: &str = &statements::delete_index(&SCHEMA, &INDEX_TABLE);
-            err_status(transaction.execute(query, &[&name]).await)?;
-            err_status(transaction.commit().await)?;
+            transaction.execute(query, &[&name]).await.map_err(internal_error)?;
+            transaction.commit().await.map_err(internal_error)?;
         }
         Ok(Response::new(()))
     }
@@ -111,9 +111,9 @@ impl Indexer for SearchIndex {
             return Err(Status::new(Code::InvalidArgument, "Response size must be a positive integer"))
         }
 
-        let mut client = err_status(make_postgres_client().await)?;
+        let mut client = make_postgres_client().await.map_err(internal_error)?;
         {
-            let transaction = err_status(client.transaction().await)?;
+            let transaction = client.transaction().await.map_err(internal_error)?;
             let query: &str = &statements::add_index(&SCHEMA, &INDEX_TABLE);
             let result = transaction.execute(query, &[&index_def.name, &index_def.language, &index_def.response_size]).await;
             result.map_err(|e| {
@@ -126,8 +126,8 @@ impl Indexer for SearchIndex {
                 }
             })?;
             let query: &str = &statements::create_index_table(&SCHEMA, &index_def.name);
-            err_status(transaction.execute(query, &[]).await)?;
-            err_status(transaction.commit().await)?;
+            transaction.execute(query, &[]).await.map_err(internal_error)?;
+            transaction.commit().await.map_err(internal_error)?;
         }
         Ok(Response::new(()))
     }
@@ -140,7 +140,7 @@ impl Indexer for SearchIndex {
         let metadata = request.metadata();
         let name = require_arg(metadata.get("x-index-name"))?;
         let query: &str = &statements::get_index(&SCHEMA, &INDEX_TABLE);
-        let results = err_status(self.client.query(query, &[&name]).await)?;
+        let results = self.client.query(query, &[&name]).await.map_err(internal_error)?;
         if results.len() < 1 {
             return Err(Status::new(Code::InvalidArgument, "The selected index doesn't exist"))
         }
@@ -150,9 +150,9 @@ impl Indexer for SearchIndex {
             format!("_{}_{}", name, rng.gen::<u32>())
         };
 
-        let mut client = err_status(make_postgres_client().await)?;
+        let mut client = make_postgres_client().await.map_err(internal_error)?;
         set_entries(&mut client, &tmp_name, request).await?;
-        swap_tables(&mut client, &name, &tmp_name).await?;
+        swap_tables(&mut client, &name, &tmp_name).await.map_err(internal_error)?;
         Ok(Response::new(()))
     }
 
@@ -183,7 +183,7 @@ impl Indexer for SearchIndex {
         };
 
         let query: &str = &statements::get_index(&SCHEMA, &INDEX_TABLE);
-        let results = err_status(self.client.query(query, &[&name]).await)?;
+        let results = self.client.query(query, &[&name]).await.map_err(internal_error)?;
         if results.len() < 1 {
             return Err(Status::new(Code::InvalidArgument, "The selected index doesn't exist"))
         }
@@ -191,7 +191,7 @@ impl Indexer for SearchIndex {
         let response_size: i32 = results[0].get(1);
 
         let query: &str = &statements::search(&SCHEMA, &name);
-        let results = err_status(self.client.query(query, &[&q.q, &lat, &lng, &radius, &lang, &response_size]).await)?;
+        let results = self.client.query(query, &[&q.q, &lat, &lng, &radius, &lang, &response_size]).await.map_err(internal_error)?;
 
         Ok(Response::new(Page {
             responses: results.into_iter().map(|row| row.get(0)).collect()
